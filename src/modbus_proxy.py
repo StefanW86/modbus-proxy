@@ -30,6 +30,9 @@ DEFAULT_LOG_CONFIG = {
 
 log = logging.getLogger("modbus-proxy")
 
+# without a timeout one unanswered request holds the device lock forever
+DEFAULT_TIMEOUT = 10
+
 
 def parse_url(url):
     if "://" not in url:
@@ -67,8 +70,9 @@ class Connection:
             self.log.info("closing connection...")
             try:
                 self.writer.close()
-                await self.writer.wait_closed()
+                await asyncio.wait_for(self.writer.wait_closed(), DEFAULT_TIMEOUT)
             except Exception as error:
+                self.writer.transport.abort()
                 self.log.info("failed to close: %r", error)
             else:
                 self.log.info("connection closed")
@@ -130,7 +134,7 @@ class ModBus(Connection):
         self.port = 502 if bind.port is None else bind.port
         self.modbus_host = url.hostname
         self.modbus_port = url.port
-        self.timeout = modbus.get("timeout", None)
+        self.timeout = modbus.get("timeout", DEFAULT_TIMEOUT)
         self.connection_time = modbus.get("connection_time", 0)
         self.unit_id_remapping = config.get("unit_id_remapping") or {}
         self.server = None
@@ -279,7 +283,7 @@ def parse_args(args=None):
     parser.add_argument(
         "--timeout",
         type=float,
-        default=10,
+        default=DEFAULT_TIMEOUT,
         help="modbus connection and request timeout in seconds",
     )
     options = parser.parse_args(args=args)

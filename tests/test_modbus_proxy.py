@@ -18,7 +18,7 @@ import toml
 import yaml
 import pytest
 
-from modbus_proxy import parse_url, parse_args, load_config, run
+from modbus_proxy import ModBus, parse_url, parse_args, load_config, run
 
 from .conftest import REQ, REP, REQ2, REP2, REQ3_ORIGINAL, REP3_MODIFIED
 
@@ -250,3 +250,26 @@ async def test_device_not_connected(modbus):
 
     with pytest.raises(asyncio.IncompleteReadError):
         await make_requests(modbus, [(REQ, REP)])
+
+
+def test_config_timeout_defaults_to_cli_default():
+    cfg = {"modbus": {"url": "plc:502"}, "listen": {"bind": ":502"}}
+    assert ModBus(cfg).timeout == parse_args(["--modbus", "plc:502"]).timeout
+
+
+@pytest.mark.asyncio
+async def test_silent_device_does_not_block_proxy():
+    # device keeps the TCP connection open but never answers (e.g. half-dead link)
+    async def silent(r, w):
+        await r.read()
+
+    device = await asyncio.start_server(silent, host="127.0.0.1")
+    addr = "{}:{}".format(*device.sockets[0].getsockname())
+    cfg = {"modbus": {"url": addr, "timeout": 0.2}, "listen": {"bind": "127.0.0.1:0"}}
+    async with ModBus(cfg) as modbus:
+        await modbus.start()
+        for _ in range(2):  # 2nd client proves the lock was released
+            with pytest.raises(asyncio.IncompleteReadError):
+                await asyncio.wait_for(make_requests(modbus, [(REQ, REP)]), 3)
+        await modbus.stop()
+    device.close()
